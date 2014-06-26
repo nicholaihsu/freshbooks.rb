@@ -4,7 +4,7 @@ require 'logger'
 
 module FreshBooks
   class Connection
-    attr_reader :account_url, :auth_token, :utc_offset, :request_headers
+    attr_reader :account_url, :consumer_key, :consumer_secret, :token, :token_secret, :utc_offset, :request_headers
 
     @@logger = Logger.new(STDOUT)
     def logger
@@ -20,14 +20,44 @@ module FreshBooks
     end
     self.log_level = Logger::WARN
 
-    def initialize(account_url, auth_token, request_headers = {}, options = {})
+    def initialize(account_url, consumer_key, consumer_secret, token, token_secret, request_headers = {}, options = {})
       raise InvalidAccountUrlError.new("account_url is expected to be in the form www.example.com without any protocol string or trailing query parameters") unless account_url =~ /^[0-9a-zA-Z\-_]+\.(freshbooks|billingarm)\.com$/
 
-      @account_url = account_url
-      @auth_token = auth_token
+      @domain = domain
+      @consumer_key = consumer_key
+      @consumer_secret = consumer_secret
+      @token = token
+      @token_secret = token_secret
       @request_headers = request_headers
       @utc_offset = options[:utc_offset] || -4
       @start_session_count = 0
+    end
+
+    def auth
+      data = {
+        :realm                  => '',
+        :oauth_version          => '1.0',
+        :oauth_consumer_key     => @consumer_key,
+        :oauth_token            => @token,
+        :oauth_timestamp        => timestamp,
+        :oauth_nonce            => nonce,
+        :oauth_signature_method => 'PLAINTEXT',
+        :oauth_signature        => signature,
+      }.map { |k,v| %Q[#{k}="#{v}"] }.join(',')
+
+      { 'Authorization' => "OAuth #{data}" }
+    end
+
+    def signature
+      CGI.escape("#{@consumer_secret}&#{@token_secret}")
+    end
+
+    def nonce
+      [OpenSSL::Random.random_bytes(10)].pack('m').gsub(/\W/, '')
+    end
+
+    def timestamp
+      Time.now.to_i
     end
 
     def call_api(method, elements = [])
@@ -103,7 +133,7 @@ module FreshBooks
     def post(request_body)
       result = nil
       request = Net::HTTP::Post.new(FreshBooks::SERVICE_URL)
-      request.basic_auth @auth_token, 'X'
+      request.headers auth
       request.body = request_body
       request.content_type = 'application/xml'
       @request_headers.each_pair do |name, value|
